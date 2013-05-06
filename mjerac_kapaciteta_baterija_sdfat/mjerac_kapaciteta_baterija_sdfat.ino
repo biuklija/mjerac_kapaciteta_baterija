@@ -1,7 +1,7 @@
 #include <LiquidCrystal.h>
 #include <SdFat.h>
 
-// konfiguracija pinova 
+// konfiguracija pinova prema shemi 
 #define SD_CS 10
 #define OK_TIPKA 8
 #define MOSFET 19
@@ -10,12 +10,12 @@
 #define BACKLIGHT_LOW 5
 #define NAPON_BAT A0
 #define NAPON_SHUNT A1
-#define OTPOR_SHUNT 2.161 
+#define OTPOR_SHUNT 2.161 // tocno izmjereni otpor shunta
 
 #define CCHARS 0 // prikaz stanja baterije kod praznjenja
 #define JOULI_D 1 // izracun joulea/wattsati
-#define TRIM 1 // kraci stringovi
-#define SD_CARD 0
+#define TRIM 1 // kraci stringovi (ukoliko je sketch prevelik za zeljeni mikrokontroler
+#define SD_CARD 1 // podrska za SD karticu
 
 // 0 - NiMh/Cd, 1 - Alkaline, 2 - LiIon, 3 - sve ostalo
 byte vrstaBaterije = 3; 
@@ -54,16 +54,15 @@ void setup()
 {
         lcdCustomChars();
         lcd.begin(16, 2);
-        pinMode(10, OUTPUT); // bez ovoga brejka za SD
-//        digitalWrite(SD_CS, LOW);
-        pinMode(PWM_BACKLIGHT, OUTPUT);
-	analogWrite(PWM_BACKLIGHT, BACKLIGHT_HIGH); // backlight
-	pinMode(NAPON_BAT, INPUT); // ispred shunta
-	pinMode(NAPON_SHUNT, INPUT); // iza shunta
-	pinMode(OK_TIPKA, INPUT_PULLUP); // tipkalo
+        pinMode(chipSelect, OUTPUT); // CS/SS pin mora biti deklariran kao izlaz
+        pinMode(PWM_BACKLIGHT, OUTPUT); // backlight LCD-a
+	analogWrite(PWM_BACKLIGHT, BACKLIGHT_HIGH); 
+	pinMode(NAPON_BAT, INPUT); // napon ispred shunta
+	pinMode(NAPON_SHUNT, INPUT); // napon iza shunta
+	pinMode(OK_TIPKA, INPUT_PULLUP); // tipkalo s internim pullupom
 	pinMode(MOSFET, OUTPUT); // gate mosfeta
-	// prepoznavanje baterije
 #if SD_CARD
+	// inicijalizacija SD kartice, ako je imamo
         if (!sd.begin(chipSelect, SPI_HALF_SPEED)) 
         {
           sdlog = false;
@@ -73,18 +72,19 @@ void setup()
 	sdlog = true;
         }
 #endif		
+	// prepoznavanje baterije po naponu
 	while(digitalRead(OK_TIPKA) == LOW)
 	{
 		mjerenje();
-		while (napon[0] <= 0.3 )
+		while (napon[0] <= 0.3 ) // napon prenizak za bilo koju bateriju
 		{
 			lcd.home();
 			lcd.print(F("Spojite bateriju"));
 			mjerenje();
 		}
-		if (napon[0] >= 1.7) { vrstaBaterije = 2; }
-		else if (napon[0] >= 1.5) { vrstaBaterije = 1; }
-		else if (napon[0] >= 1.1) { vrstaBaterije = 0; }
+		if (napon[0] >= 1.7) { vrstaBaterije = 2; } // preko 1,7V -  li-ion
+		else if (napon[0] >= 1.5) { vrstaBaterije = 1; } // preko 1,5V - alkaline
+		else if (napon[0] >= 1.1) { vrstaBaterije = 0; } // preko 1,1V - puna NiMH/NiCd 
 		else 
 		{ 
 			lcd.print(F("Prazna baterija "));
@@ -109,7 +109,7 @@ void setup()
 		lcd.print(vrstaBaterijeNaziv[vrstaBaterije]);
 		lcd.setCursor(13,1);
 		lcd.print(F("OK?"));
-		delay(500);
+		delay(500); // zbog ovoga tipku START treba malo duze drzati za pocetak mjerenja
 	}
 	digitalWrite(MOSFET, HIGH); // zapocni mjerenje
 	stanjeMjerenja = 1; 
@@ -121,21 +121,21 @@ void setup()
 #endif
 	pocetakMjerenja = millis();
 	lcd.clear();
-	analogWrite(PWM_BACKLIGHT, BACKLIGHT_LOW); // backlight
+	analogWrite(PWM_BACKLIGHT, BACKLIGHT_LOW); // smanjujemo pozadinsko osvjetljenje LCD-a
 }
 
 void loop()
 {
 	int brojMjerenja = 0;
-	float prosjecniNapon[2] = {0, 0};
+	float prosjecniNapon[2] = {0, 0}; // kako izmjereni naponi variraju, racunat cemo prosjecnu vrijednost svake sekunde
 	switch(stanjeMjerenja) {
 	case 1:
-		while( napon[0] >= cutoff[vrstaBaterije])
+		while( napon[0] >= cutoff[vrstaBaterije]) // dok god je napon iznad granicnog, mjerimo, ispisujemo, logiramo
 		{
 			brojMjerenja++;
 			prosjecniNapon[0] += analogRead(A0) * 0.00488;
 			prosjecniNapon[1] +=  analogRead(A1) * 0.00488;
-			if (millis() >= zadnjeMjerenje + 1000)
+			if (millis() >= zadnjeMjerenje + 1000) // prosla je sekunda
 			{
 				napon[0] = prosjecniNapon[0] / brojMjerenja;
 				napon[1] = prosjecniNapon[1] / brojMjerenja;
@@ -148,19 +148,19 @@ void loop()
 		}
 		stanjeMjerenja = 2;
 		krajMjerenja = millis();
-		digitalWrite(MOSFET, LOW);
+		digitalWrite(MOSFET, LOW); // zatvaramo mosfet i prekidamo praznjenje
 #if SD_CARD
 		if (sdlog) 
 		{
 			logfile.close();
 		}
 #endif
-		analogWrite(PWM_BACKLIGHT, BACKLIGHT_HIGH); // backlight
+		analogWrite(PWM_BACKLIGHT, BACKLIGHT_HIGH); // pojacavamo backlight
 		break; 
 	case 2:
 		if (millis() >= zadnjiPrikaz + 5000)
 		{
-			switch(ekran)	{
+			switch(ekran)	{ // rezultate mjerenja prikazujemo u tri ekrana na 16x02 LCD-u
 			case 0: 
 				lcd.clear();
 				lcd.print(F("Vrijeme"));
@@ -221,7 +221,7 @@ byte prikazBaterije(float naponF)
 {
 	int napon = naponF * 1000;
 	const unsigned int batstatus[3] = {900, 900, 3400}; // minimalni naponi za "praznu" bateriju 
-	const byte korak[3] = {50, 100, 50}; // s ovim brojem dijelis razliku od batstatus do trenutnog napona
+	const byte korak[3] = {50, 100, 50}; // s ovim brojem dijelimo razliku od batstatus do trenutnog napona
 	byte stanje = (napon - batstatus[vrstaBaterije]) / korak[vrstaBaterije]; 
 	if (stanje >= 5)
 	{
@@ -280,7 +280,7 @@ void prikazMjerenja()
 #endif 
 }
 
-void pocNula(int vrijednost)
+void pocNula(int vrijednost) // prljavi nacin formatiranja brojki s pocetnom nulom, da prikaz na displayu bude unificiran
 {
 	if (vrijednost <= 9)
 	{
